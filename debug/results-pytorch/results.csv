@@ -1,0 +1,5 @@
+tag,metric,metric,metric,metric,metric,metric,metric,metric,dataset
+model,AP,P@20,RR,RR@10,Success@5,nDCG,nDCG@10,nDCG@20,
+splade-v2,0.3527,0.0372,0.3578,0.3469,0.5139,0.4760,0.4094,0.4328,msmarco_dev
+splade-v2,0.4730,0.6965,0.9767,0.9767,1.0000,0.7144,0.6923,0.6725,trec2019
+splade-v2,0.4630,0.5944,0.8918,0.8910,0.9815,0.6906,0.6660,0.6323,trec2020
