@@ -37,19 +37,6 @@ class CudaMaxAggregation(CudaAggregation):
         # Computes log(1+x)
         return torch.log1p(values.clamp(min=0))
     
-class HFMaskedLanguageModelHiddenStatesEnabled(HFMaskedLanguageModel):
-    def forward(self, tokenized: TokenizedTexts):
-        tokenized = tokenized.to(self.model.device)
-        kwargs = {}
-        if tokenized.token_type_ids is not None:
-            kwargs["token_type_ids"] = tokenized.token_type_ids
-
-        return self.model(
-            input_ids=tokenized.ids,
-            attention_mask=tokenized.mask,
-            output_hidden_states=True
-        )
-    
 class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
     def __initialize__(self, options: ModuleInitOptions):
         self.encoder.initialize(options)
@@ -71,7 +58,7 @@ class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
             texts, options=TokenizerOptions(self.maxlen)
         )
 
-        value = self.aggregation(self.encoder(tokenized).hidden_states[-1], tokenized.mask)
+        value = self.aggregation(self.encoder(tokenized).logits, tokenized.mask)
         return TextsRepresentationOutput(value, tokenized)
 
     

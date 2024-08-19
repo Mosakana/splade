@@ -1,4 +1,4 @@
-id: splade_max_with_module
+id: add-identity
 title: 'SPLADE_max: SPLADEv2 with max aggregation'
 parent: _common
 gpu: true

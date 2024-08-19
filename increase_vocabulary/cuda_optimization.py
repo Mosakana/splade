@@ -9,6 +9,7 @@ from xpmir.text.encoders import (
 from optim_forward_without_iteration import OptimReluMaxLinear
 import torch
 import torch.nn as nn
+from experimaestro import Param
 
 
 class CudaAggregation(Aggregation):
@@ -30,27 +31,18 @@ class CudaAggregationModule(nn.Module):
 class CudaMaxAggregation(CudaAggregation):
     """Aggregate using a max"""
 
-    def __call__(self, hidden_state, output_embeddings, mask):
+    def __call__(self, input, output_embeddings, mask):
         # Get the maximum (masking the values)
-        values = OptimReluMaxLinear.apply(hidden_state, output_embeddings.weight.t(), output_embeddings.bias, mask.to(hidden_state.device))
+        values = OptimReluMaxLinear.apply(input, output_embeddings.weight.t(), output_embeddings.bias, mask.to(input.device))
 
         # Computes log(1+x)
         return torch.log1p(values.clamp(min=0))
     
-class HFMaskedLanguageModelHiddenStatesEnabled(HFMaskedLanguageModel):
-    def forward(self, tokenized: TokenizedTexts):
-        tokenized = tokenized.to(self.model.device)
-        kwargs = {}
-        if tokenized.token_type_ids is not None:
-            kwargs["token_type_ids"] = tokenized.token_type_ids
-
-        return self.model(
-            input_ids=tokenized.ids,
-            attention_mask=tokenized.mask,
-            output_hidden_states=True
-        )
-    
 class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
+    k: Param[int]
+    
+    epsilon: Param[float]
+
     def __initialize__(self, options: ModuleInitOptions):
         self.encoder.initialize(options)
         self.tokenizer.initialize(options)
@@ -61,6 +53,25 @@ class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
         assert isinstance(
             output_embeddings, nn.Linear
         ), f"Cannot handle output embeddings of class {output_embeddings.__cls__}"
+
+        w = output_embeddings.weight
+        b = output_embeddings.bias
+        noise = torch.norm(w) / w.numel() * self.epsilon
+
+        w_expanded = w.repeat(self.k, 1)
+        b_expanded = b.repeat(self.k)
+
+        w_expanded += torch.randn_like(w_expanded) * noise
+        b_expanded += torch.randn_like(b_expanded) * noise
+
+        with torch.no_grad():
+            output_embeddings.weight = nn.Parameter(w_expanded, requires_grad=True)
+            output_embeddings.bias = nn.Parameter(b_expanded, requires_grad=True)
+
+        del w_expanded
+        del b_expanded
+        torch.cuda.empty_cache()
+        
         self.encoder.model.set_output_embeddings(nn.Identity())
 
         self.aggregation = self.aggregation.get_output_module(output_embeddings)
@@ -71,7 +82,7 @@ class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
             texts, options=TokenizerOptions(self.maxlen)
         )
 
-        value = self.aggregation(self.encoder(tokenized).hidden_states[-1], tokenized.mask)
+        value = self.aggregation(self.encoder(tokenized).logits, tokenized.mask)
         return TextsRepresentationOutput(value, tokenized)
 
     
