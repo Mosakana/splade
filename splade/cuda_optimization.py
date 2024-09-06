@@ -5,10 +5,9 @@ from xpmir.text.encoders import (
     InputType as EncoderInputType,
     TextsRepresentationOutput,
 )
-from splade.increase_vocabulary.cuda_kernel import OptimReluMaxLinear
+from splade.splade.cuda_kernel import OptimReluMaxLinear
 import torch
 import torch.nn as nn
-
 
 class CudaAggregation(Aggregation):
     """The aggregation function for Splade"""

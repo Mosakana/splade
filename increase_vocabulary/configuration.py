@@ -84,6 +84,10 @@ class Retrieval:
     """How many documents to process at once in the
     FullRetrieverScorer(batch_size) during validation"""
 
+@configuration()
+class Clustering:
+    requirements: str = "duraiton=2 days & cuda(mem=24G) & cpu(mem=32G)"
+
 
 @configuration()
 class SPLADE(DualMSMarcoV1Configuration):
@@ -92,6 +96,7 @@ class SPLADE(DualMSMarcoV1Configuration):
     indexation: Indexation = Factory(Indexation)
     splade: SpladeLearner = Factory(SpladeLearner)
     retrieval: Retrieval = Factory(Retrieval)
+    clustering: Clustering = Factory(Clustering)
 
     dev_test_size: int = 0
     """Development test size (0 to leave it like this)"""

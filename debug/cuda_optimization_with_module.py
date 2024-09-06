@@ -51,7 +51,7 @@ class HFMaskedLanguageModelHiddenStatesEnabled(HFMaskedLanguageModel):
         )
     
 class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
-    def __initialize__(self, options: ModuleInitOptions):
+    def __initialize__(self ,options: ModuleInitOptions):
         self.encoder.initialize(options)
         self.tokenizer.initialize(options)
 

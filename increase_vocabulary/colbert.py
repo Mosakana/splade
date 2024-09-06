@@ -68,21 +68,21 @@ class ColbertEncoder(HFModel):
     autoconfig = ColbertConfig
 
 
-if __name__ == "__main__":
-    # Example of use
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    from xpmir.text.huggingface import HFStringTokenizer, HFTokensEncoder
+# if __name__ == "__main__":
+#     # Example of use
+#     import logging
+#     logging.basicConfig(level=logging.INFO)
+#     from xpmir.text.huggingface import HFStringTokenizer, HFTokensEncoder
 
-    model_id = "colbert-ir/colbertv2.0"
-    tokenizer = HFStringTokenizer.from_pretrained_id(model_id)
-    encoder = HFTokensEncoder.C(model=ColbertEncoder.from_pretrained_id(model_id))
-    text_encoder = TokenizedTextEncoder.C(encoder=encoder, tokenizer=tokenizer)
+#     model_id = "colbert-ir/colbertv2.0"
+#     tokenizer = HFStringTokenizer.from_pretrained_id(model_id)
+#     encoder = HFTokensEncoder.C(model=ColbertEncoder.from_pretrained_id(model_id))
+#     text_encoder = TokenizedTextEncoder.C(encoder=encoder, tokenizer=tokenizer)
 
-    o_text_encoder = text_encoder.instance()
-    o_text_encoder.initialize(ModuleInitMode.DEFAULT.to_options())
+#     o_text_encoder = text_encoder.instance()
+#     o_text_encoder.initialize(ModuleInitMode.DEFAULT.to_options())
     
-    # This should be a 2 x 4 x 128 tensor
-    print(o_text_encoder(["hello world", "another document"]).value.shape)
-    print(o_text_encoder.encoder.model.model.last_hidden_state.shape)
+#     # This should be a 2 x 4 x 128 tensor
+#     print(o_text_encoder(["hello world", "another document"]).value.shape)
+#     print(o_text_encoder.encoder.model.model.last_hidden_state.shape)
 
