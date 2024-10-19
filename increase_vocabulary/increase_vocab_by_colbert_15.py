@@ -126,7 +126,7 @@ def run(xp: IRExperimentHelper, cfg: SPLADE) -> PaperResults:
                                               documents=documents, 
                                               documents_per_token=3000, 
                                               vectors_per_token=1000, 
-                                              max_vocab=3,
+                                              max_vocab=1.7,
                                               device=device,
                                               retriver=retrievers(documents, k=3000)).submit(launcher=laucher_clustering)
     

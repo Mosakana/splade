@@ -2,6 +2,7 @@ import logging
 import torch
 import h5py
 from pathlib import Path
+import pickle as pkl
 import faiss
 from experimaestro import Param, Task, pathgenerator, Annotated, LightweightTask, Config, tqdm, Meta
 from xpmir.learning.devices import DEFAULT_DEVICE, Device
@@ -55,6 +56,17 @@ class HFProjectionLayerLoader(LightweightTask):
 
         with self.linear.path.open("rb") as fp:
             linear = torch.load(fp)
+        
+        original_projection = self.model.model.get_output_embeddings()
+        original_norm = original_projection.weight.norm()
+
+        print(original_projection.weight.shape[0])
+        print(linear.weight.shape[0])
+
+        linear.weight.data = linear.weight * original_norm * original_projection.weight.shape[0] / linear.weight.norm() / linear.weight.shape[0] / 2
+        
+        print(original_norm)
+        print(linear.weight.norm())
 
         self.model.model.set_output_embeddings(linear)
 
@@ -114,15 +126,18 @@ class ClusterCompute(Task):
     
     def kmeans(self, vectors: torch.Tensor, k: int):
         D = vectors.shape[1]
+        mean = vectors.mean(dim=1).unsqueeze(1)
+        std = vectors.std(dim=1).unsqueeze(1)
+        normalized_vectors = (vectors - mean) / std
         kmeans = faiss.Kmeans(d=D, k=k, gpu=True)
-        kmeans.train(vectors.cpu().numpy())
+        kmeans.train(normalized_vectors.cpu().numpy())
 
         return kmeans.obj[-1], torch.from_numpy(kmeans.centroids)
-
+    
     @torch.no_grad()
     def execute(self):
         self.encoder.initialize(ModuleInitMode.DEFAULT.to_options())
-        self.encoder.to(self.device.value)
+        self.encoder.to(self.device.value).eval()
         voc_size = self.encoder.tokenizer.vocabulary_size()
         vk = torch.zeros(voc_size, dtype=torch.int)
         vk += 1
@@ -136,67 +151,100 @@ class ClusterCompute(Task):
         
         # TODO: Select documents_per_token documents (just the ID) for each token
 
-        with h5py.File('vectors_data.h5', 'w') as h5f:
-            data_set = h5f.create_dataset('tensors', shape=(voc_size, self.vectors_per_token, 768), dtype='float16')
+        path_to_mask = Path('vector_mask.pt')
+        if path_to_mask.exists():
+            with open(path_to_mask, 'rb') as file:
+                vector_mask = torch.load(file)
 
-            BATCH_SIZE = 64
-            with tqdm(total=voc_size, desc=f'Initializing vocabulary') as init:
-                for term, vocab_id in vocab.items():
-                    record = create_record(text=term)
-                    if "[unused" in term:   # pass special terms
-                        continue
-                    elif "##" in term:
-                        term = term[2:]
-                    retrieved_docs = self.retriver.retrieve(record=record)   # get relevant docs by anserini
-                    if len(retrieved_docs) == 0:
-                        continue
-                    docs =  [self.documents.document_ext(doc.document[IDItem].id)[TextItem].text for doc in retrieved_docs]
-                    vectors = self.batch_sampling(docs=docs, batch_size=BATCH_SIZE, vocab=vocab_id)    
-                    n_vectors = vectors.shape[0]
-                    del docs, retrieved_docs
-                    vector_mask[vocab_id] = n_vectors
-                    if n_vectors == 0:
-                        continue
-                    elif n_vectors < self.vectors_per_token:
-                        vectors = nn.functional.pad(vectors, (0, 0, 0, self.vectors_per_token - vector_mask[vocab_id]), "constant", 0)
-                    elif n_vectors > self.vectors_per_token:
-                        vector_mask[vocab_id] = self.vectors_per_token
-                        vectors = vectors[torch.randperm(n_vectors)[:self.vectors_per_token], :]
-                    
-                    data_set[vocab_id] = vectors.cpu().numpy()
+        path_to_data = Path('vectors_data.h5')
+        if not path_to_data.exists():
+            with h5py.File(path_to_data, 'w') as h5f:
+                data_set = h5f.create_dataset('tensors', shape=(voc_size, self.vectors_per_token, 768), dtype='float16')
 
-                    if vector_mask[vocab_id] == 0:
-                        kmeans_scores[vocab_id] = 0
-                        next_kmeans_scores[vocab_id] = torch.inf
-                        vk[vocab_id] = 0
+                BATCH_SIZE = 64
+                with tqdm(total=voc_size, desc=f'Initializing vocabulary') as init:
+                    for term, vocab_id in vocab.items():
+                        record = create_record(text=term)
+                        if "[unused" in term: # pass special terms
+                            vk[vocab_id] = 0
+                            kmeans_scores[vocab_id] = -torch.inf
+                            continue
+                        elif "##" in term:
+                            term = term[2:]
+                        retrieved_docs = self.retriver.retrieve(record=record)   # get relevant docs by anserini
+                        if len(retrieved_docs) == 0:
+                            continue
+                        docs =  [self.documents.document_ext(doc.document[IDItem].id)[TextItem].text for doc in retrieved_docs]
+                        vectors = self.batch_sampling(docs=docs, batch_size=BATCH_SIZE, vocab=vocab_id)    
+                        n_vectors = vectors.shape[0]
+                        del docs, retrieved_docs
+                        vector_mask[vocab_id] = n_vectors
+                        if n_vectors == 0:
+                            continue
+                        elif n_vectors < self.vectors_per_token:
+                            vectors = nn.functional.pad(vectors, (0, 0, 0, self.vectors_per_token - vector_mask[vocab_id]), "constant", 0)
+                        elif n_vectors > self.vectors_per_token:
+                            vector_mask[vocab_id] = self.vectors_per_token
+                            vectors = vectors[torch.randperm(n_vectors)[:self.vectors_per_token], :]
+                        
+                        data_set[vocab_id] = vectors.cpu().numpy()
 
-                    elif vector_mask[vocab_id] < 39:  # the minimum amount of data for one cluster in faiss is 39
-                        kmeans_scores[vocab_id] = 0
-                        expended_vocabulary[vocab_id] = vectors.mean(dim=0).unsqueeze(0)
-                        next_kmeans_scores[vocab_id] = torch.inf
+                        if vector_mask[vocab_id] == 0:
+                            next_kmeans_scores[vocab_id] = torch.inf
+                            vk[vocab_id] = 0
 
-                    elif 39 <= vector_mask[vocab_id] < 78:
-                        kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
-                        next_kmeans_scores[vocab_id] = torch.inf
-                    
-                    else:
-                        kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
-                        next_kmeans_scores[vocab_id], next_kmeans_centroids[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=2)
-                    init.update(1)
-                    del vectors
+                        elif vector_mask[vocab_id] < 39:  # the minimum amount of data for one cluster in faiss is 39
+                            expended_vocabulary[vocab_id] = vectors.mean(dim=0).unsqueeze(0)
+                            next_kmeans_scores[vocab_id] = torch.inf
 
-        with open('vector_mask.pt', 'wb') as file:
-            torch.save(vector_mask, file)
+                        elif 39 <= vector_mask[vocab_id] < 78:
+                            kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
+                            next_kmeans_scores[vocab_id] = torch.inf
+                        
+                        else:
+                            kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
+                            next_kmeans_scores[vocab_id], next_kmeans_centroids[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=2)
+                        init.update(1)
+                        del vectors
+
+        else:  # load saved data from data set
+             with h5py.File(path_to_data, 'r') as h5f:
+                with tqdm(total=voc_size, desc=f'Initializing vocabulary') as init:
+                    for term, vocab_id in vocab.items():
+                        vectors = torch.from_numpy(h5f['tensors'][vocab_id])
+
+                        if vector_mask[vocab_id] == 0:
+                            next_kmeans_scores[vocab_id] = torch.inf
+                            vk[vocab_id] = 0
+
+                        elif vector_mask[vocab_id] < 39:  # the minimum amount of data for one cluster in faiss is 39
+                            expended_vocabulary[vocab_id] = vectors.mean(dim=0).unsqueeze(0)
+                            next_kmeans_scores[vocab_id] = torch.inf
+
+                        elif 39 <= vector_mask[vocab_id] < 78:
+                            kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
+                            next_kmeans_scores[vocab_id] = torch.inf
+                        
+                        else:
+                            kmeans_scores[vocab_id], expended_vocabulary[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=1)
+                            next_kmeans_scores[vocab_id], next_kmeans_centroids[vocab_id] = self.kmeans(vectors=vectors[:vector_mask[vocab_id], :], k=2)
+                        init.update(1)
+                        del vectors
+
+
+        if not path_to_mask.exists():
+            with open(path_to_mask, 'wb') as file:
+                torch.save(vector_mask, file)
 
         target_vocab=int(self.max_vocab * voc_size)
         with tqdm(total=target_vocab - int(vk.sum()), desc=f'Processing - {vk.sum()} => {target_vocab}') as clustering_proc:
             while vk.sum() < target_vocab:
-                v_optim = torch.argmax(kmeans_scores - next_kmeans_scores)
+                v_optim = torch.argmax(kmeans_scores - next_kmeans_scores) # maybe here will cause some problems
                 vk[v_optim] += 1
                 kmeans_scores[v_optim] = next_kmeans_scores[v_optim]
                 expended_vocabulary[v_optim] = next_kmeans_centroids[v_optim]
 
-                with h5py.File('vectors_data.h5', 'r') as h5f:
+                with h5py.File(path_to_data, 'r') as h5f:
                     vectors = torch.from_numpy(h5f['tensors'][v_optim])
                 if vector_mask[v_optim] < (vk[v_optim] + 1) * 39:
                     next_kmeans_scores[v_optim] = torch.inf
@@ -209,9 +257,6 @@ class ClusterCompute(Task):
 
 
         expended_projection = torch.cat(list(map(lambda x: x.unsqueeze(0) if len(x.shape) == 1 else x, filter(lambda x: x is not None, expended_vocabulary))))
-
-        print(vk.sum())
-        print(expended_projection.shape)
         
         # TODO: get the documents_per_token vectors for each token:
         # - process batch of tokens for efficiency
@@ -223,6 +268,9 @@ class ClusterCompute(Task):
         # Save the tensor
         with self.path.open("wb") as fp:
             torch.save(self.linear, fp)
+        
+        with open('vk.pt', 'wb') as file:
+            torch.save(vk, file)
 
-
-        print(f'test on cluster : {torch.count_nonzero(self.linear.weight) / self.linear.weight.numel()}')
+        with open('vocab.pkl', 'wb') as file:
+            pkl.dump(vocab, file)

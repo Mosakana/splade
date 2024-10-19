@@ -5,7 +5,7 @@ from xpmir.text.encoders import (
     InputType as EncoderInputType,
     TextsRepresentationOutput,
 )
-from splade.splade.cuda_kernel import OptimReluMaxLinear
+from cuda_kernel import OptimReluMaxLinear
 import torch
 import torch.nn as nn
 
@@ -46,8 +46,6 @@ class SpladeTextEncoderV2Cuda(SpladeTextEncoderV2):
         assert isinstance(
             output_embeddings, nn.Linear
         ), f"Cannot handle output embeddings of class {output_embeddings.__cls__}"
-
-        print(f'test on init : {torch.count_nonzero(output_embeddings.weight) / output_embeddings.weight.numel()}')
         
         self.encoder.model.set_output_embeddings(nn.Identity())
         self.aggregation = self.aggregation.get_output_module(output_embeddings)

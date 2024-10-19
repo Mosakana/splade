@@ -1,0 +1,38 @@
+id: increase_vocabulary_colbert_15
+title: 'SPLADE_max: SPLADEv2 with max aggregation'
+parent: _common4
+gpu: true
+base_hf_id: distilbert-base-uncased
+
+indexation:
+    requirements: duration=2 days & cpu(mem=2G)
+    training_requirements: duration=4 days & cuda(mem=40G)
+    indexspec: OPQ4_16,IVF65536_HNSW32,PQ4
+    faiss_max_traindocs: 800_000
+
+splade:
+    optimization:
+        steps_per_epoch: 128
+        # In the paper it is 128 but it is too large for our gpu.
+        batch_size: 80
+        # 150k steps for training
+        max_epochs: 1200
+        lr: 2.0e-5
+        num_warmup_steps: 6000
+
+    model: splade_max
+    # validation for each (steps_per_epoch * validation interval) steps
+    validation_interval: 8
+    lambda_q: 3.0e-4
+    lambda_d: 1.0e-4
+    lambda_warmup_steps: 50000
+    requirements: duration=4 days & cuda(mem=40G)
+
+retrieval:
+    requirements: duration=4 days & cuda(mem=24G)
+    topK: 1000
+    retTopK: 50
+    batch_size_full_retriever: 200
+
+clustering:
+    requirements: duration=4 days & cuda(mem=24G)
